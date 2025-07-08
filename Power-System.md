@@ -1,7 +1,7 @@
 # Power System Plugin Overview
 
 ## Core Goal  
-A scalable, event-driven electricity grid system for Unreal Engine. Supports producers, consumers, storage, switches, and hierarchical subgrids—featuring priority-based global balancing, flexible grouping, visual wiring, and dynamic isolation handling.
+Manage a flexible, performant electricity grid system with producers, consumers, batteries (storage), switches, and hierarchical grids/subgrids—supporting priority-based load balancing, battery charge/discharge logic, event-driven updates, and dynamic grid isolation.
 
 ---
 
@@ -9,49 +9,55 @@ A scalable, event-driven electricity grid system for Unreal Engine. Supports pro
 
 ### 1.1 World Subsystem: `UPowerSystemSubsystem`  
 - Singleton managing all power grids in the world.  
-- Owns and updates all active `UPowerGrid` instances.  
-- Coordinates global ticking and event propagation.
+- Maintains and updates all active `UPowerGrid` instances.  
+- Coordinates global ticking and event dispatching.
 
 ### 1.2 Grid Classes
 
 | Class           | Role                                                              |
 |-----------------|-------------------------------------------------------------------|
-| `UPowerGrid`    | Central controller. Balances all producers and batteries globally across all connected `UPowerSubgrid`s. Detects and handles isolated groups. |
-| `UPowerSubgrid` | Logical power domain containing producers, consumers, and storage. Reports demand and participates in global balancing. |
+| `UPowerGrid`    | Top-level controller managing multiple connected subgrids. Balances all producers and batteries globally across subgrids. Detects isolated clusters and balances them independently. |
+| `UPowerSubgrid` | Logical contained power domain holding producers, consumers, and storage devices. Reports demand and status to `UPowerGrid`. Participates in global balancing or isolated local balancing if disconnected. |
 
 ---
 
 ## 2. Device Components
 
-Each device type is modularized with components that register with their subgrid:
+Each device type has a dedicated component responsible for power logic and registration:
 
-| Component                  | Description                                                       |
-|----------------------------|-------------------------------------------------------------------|
-| `UPowerProducerComponent`  | Supplies power. Has max output, dynamic capacity, and priority.   |
-| `UPowerConsumerComponent`  | Draws power. Has load, priority, and can be load-shed.            |
-| `UPowerStorageComponent`   | Batteries or capacitors. Manages charge/discharge with priority.  |
-| `UPowerSwitchComponent`    | Logical breaker isolating devices or subgrids.                    |
-| `UPowerRelayComponent`     | Passive connection grouping devices into the same subgrid.       |
+| Component                  | Description                                                     |
+|----------------------------|-----------------------------------------------------------------|
+| `UPowerProducerComponent`  | Supplies power with max output, priority, and dynamic output control. Registers to its `UPowerSubgrid`. |
+| `UPowerConsumerComponent`  | Requests power with load and priority. Can be load-shed if needed. Registered to `UPowerSubgrid`. |
+| `UPowerStorageComponent`   | Manages stored energy (batteries, capacitors), charge/discharge rates, capacity, and priority. Registered to `UPowerSubgrid`. |
+| `UPowerSwitchComponent`    | Controls flow of power on/off within or between grids. Acts as breakers or isolators. |
+| `UPowerRelayComponent`     | Passive component acting as a wire or distribution box. Devices connected through it belong to the same subgrid. |
+
+- Components register/unregister with their owning `UPowerSubgrid` during begin/end play.
 
 ---
 
 ## 3. Interfaces
 
-| Interface                  | Description                                               |
-|----------------------------|-----------------------------------------------------------|
-| `IPowerGridNode`           | Generic interface for connectable grids and subgrids.    |
-| `IPowerDevice`             | Shared interface for producers, consumers, and storage.  |
-| `IPowerStatusReportable`   | For debugging and UI status queries.                      |
-| `IPowerControllable`       | For togglable devices like switches.                      |
+Define shared interfaces to unify device and grid interactions:
+
+| Interface                  | Purpose                                                        |
+|----------------------------|----------------------------------------------------------------|
+| `IPowerGridNode`           | Base interface for connectable units (grids, subgrids).        |
+| `IPowerDevice`             | Common interface for producers, consumers, and storage devices.|
+| `IPowerControllable`       | Interface for logic-controlled devices such as switches.       |
+| `IPowerStatusReportable`   | Provides status information for debugging or UI display.       |
 
 ---
 
-## 4. Load Balancing and Priorities
+## 4. Priority & Load Balancing
 
-- `UPowerGrid` globally balances all producers and batteries across connected subgrids.  
-- Producers sorted by priority and capped at max output.  
-- Batteries charge from surplus power and discharge during deficits, respecting capacity and priority.  
-- `UPowerSubgrid` reports total demand and device registrations; receives power budget to distribute to consumers.
+- `UPowerGrid` performs **global priority-based balancing** across all connected subgrids:  
+  - Producers are sorted by priority and dispatched up to max output.  
+  - Batteries charge only from surplus power and discharge to meet demand respecting capacity and priority.  
+- Subgrids report their aggregated demand and status upwards;  
+- `UPowerGrid` allocates production and battery usage, then issues power budgets back to subgrids.  
+- If subgrids become isolated (due to switch-off or breakage), they balance power independently within their cluster using the same global algorithm but scoped locally.
 
 ---
 
@@ -63,56 +69,56 @@ Each device type is modularized with components that register with their subgrid
 | `ActorB`         | `AActor*`       | Second connected actor with a power component  |
 | `SlotA`          | `FName`         | Connection slot name on `ActorA`                |
 | `SlotB`          | `FName`         | Connection slot name on `ActorB`                |
-| `ConnectionObject` | `UObject*`     | Optional visual representation (e.g., spline)  |
+| `ConnectionObject` | `UObject*`     | Optional visual representation (e.g., spline, cable actor) |
 
 ### Connection Rules
 
 - Devices connected via `UPowerRelayComponent` belong to the **same subgrid**.  
 - Devices connected via `UPowerSwitchComponent` are **not in the same subgrid** (switch isolates).  
-- Connections define the physical or logical wiring between devices.
+- Connections represent physical or logical wiring between devices.
 
 ---
 
 ## 6. Event-Driven Updates
 
-- Components cache last known states.  
-- State changes mark owning subgrid or grid as **dirty** for update.  
-- Dirty grids update on next tick or scheduled cycle.  
-- Full sync can be forced or run periodically.
+- Devices cache last known state (output, load, charge).  
+- On any change (load, capacity, device added/removed), **dirty events** are fired.  
+- Affected subgrids and grids are marked dirty and updated next tick or scheduled interval.  
+- Stable parts of the grid skip updates for performance.  
+- Supports forced full updates or fallback periodic syncing.
 
 ---
 
-## 7. Gameplay Features
+## 7. Additional Gameplay Features
 
-- Subgrids can be toggled on/off via switches for load shedding or maintenance.  
-- Switches isolate subgrids or device groups.  
-- Relay components group devices without limiting power flow.  
-- Supports complex priority schemes for producers and storage devices.  
-- Visual wire layouts supported through `ConnectionObject`.
+- Subgrids can be enabled or disabled for maintenance or load shedding.  
+- Switches act as circuit breakers or fuse boxes with integrated logic for scripted/automated control.  
+- Relay components enable grouping without limiting power flow.  
+- Supports complex priority schemes for producers and storage devices (e.g., slow-charging capacitors).  
+- Visual wire layouts supported via `ConnectionObject`.
 
 ---
 
 ## 8. Communication Flow
 
-1. Devices update state and mark subgrids dirty.  
-2. Subgrids report demand and device status to the main grid.  
-3. `UPowerGrid` computes global power flow respecting priorities.  
-4. Power budgets are sent back to subgrids for consumer distribution.  
-5. Isolated subgrids perform balancing independently within their partitions.
+- **Upward:** Subgrids report demand, supply, battery status, and priorities to the main grid.  
+- **Downward:** The main grid issues production targets and power budgets per subgrid.  
+- **Subgrid:** Distributes power to consumers based on allocated budgets and priorities.  
+- **Dirty event propagation:** From devices → subgrid → grid → subsystem.
 
 ---
 
 ## 9. Performance & Scalability
 
-- Event-driven updates minimize CPU usage.  
-- Centralized load balancing avoids redundant calculations.  
-- Supports large, modular power networks with thousands of devices.  
-- Topology and connection management allows clear and flexible wiring.
+- Event-driven updates minimize CPU load.  
+- One-pass capped load balancing algorithm optimizes power distribution.  
+- Modular grid and subgrid data allow scalability to thousands of devices.  
+- Connection and switch topology management provides flexible network configuration.
 
 ---
 
-## 10. Debug & Monitoring
+## 10. Debug & Visualization
 
-- Planned overlays visualize load, power flow, and bottlenecks.  
-- Query interface for device and grid status.  
-- Connection objects enable visual debugging of wiring.
+- Queryable interface for power flow, device status, and battery levels.  
+- Planned visual overlays for load, production, and bottlenecks.  
+- Logging for power usage and grid events to aid debugging and analytics.
